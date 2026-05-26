@@ -40,21 +40,35 @@ class Chain:
         prompt_email = PromptTemplate.from_template(
             """
             ### JOB DESCRIPTION:
-            {job_description}
+    {job_description}
 
-            ### INSTRUCTION:
-            You are Ashima, a business development executive at APK Consulting. APK is an AI & Software Consulting company dedicated to facilitating
-            the seamless integration of business processes through automated tools. 
-            Over our experience, we have empowered numerous enterprises with tailored solutions, fostering scalability, 
-            process optimization, cost reduction, and heightened overall efficiency. 
-            Your job is to write a cold email to the client regarding the job mentioned above describing the capability of AtliQ 
-            in fulfilling their needs.
-            Also add the most relevant ones from the following links to showcase APK's portfolio: {link_list}
-            Remember you are Ashima, BDE at APK. 
-            Do not provide a preamble.
-            ### EMAIL (NO PREAMBLE):
+    ### ABOUT APK CONSULTING:
+    APK Consulting is an AI & Software Consulting firm that helps companies 
+    build and integrate backend systems, data pipelines, and AI automation tools.
+    We specialize in reducing engineering hiring risk by providing senior-level 
+    consultants who can contribute from day one.
 
-            """
+    ### INSTRUCTION:
+    You are Ashima, a Business Development Executive at APK Consulting.
+    
+    Write a cold email to the hiring manager for the job described above.
+    The goal of the email is to pitch APK Consulting's services as an 
+    alternative or supplement to hiring full-time.
+    
+    The email must:
+    - Open with one specific observation about the role or company (not a generic opener)
+    - Explain in 2-3 sentences exactly how APK solves the pain this role is trying to solve
+    - Include only the most relevant portfolio links from this list, 
+      matching them specifically to skills mentioned in the job description: {link_list}
+    - End with one clear, low-friction call to action (suggest a 15-min call)
+    - Be under 150 words total
+    - Sound human, direct, and confident — not salesy
+    
+    Do not use phrases like "I hope this email finds you well" or "I wanted to reach out".
+    Do not provide a preamble.
+    
+    ### EMAIL:
+    """
         )
 
         chain_email = prompt_email | self.llm
