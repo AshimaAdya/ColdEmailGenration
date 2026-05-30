@@ -1,5 +1,15 @@
 import re
 
+# ~4 chars/token; 6 000 tokens leaves headroom for the prompt on the 12k TPM tier
+_MAX_CHARS = 24_000
+
+def truncate_text(text: str, max_chars: int = _MAX_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    last_space = truncated.rfind(" ")
+    return truncated[:last_space] if last_space > 0 else truncated
+
 def clean_text(text):
     # Remove HTML tags
     text = re.sub(r'<[^>]*?>', '', text)
