@@ -1,115 +1,140 @@
-# 📧 AI-Powered Cold Email Generator
+# AI-Powered Cold Email Generator
 
-An AI-driven cold email generator built using **Groq LLM, LangChain, and Streamlit**.
+An AI-driven cold email generator built using **Groq LLM (Llama 3.3 70B), LangChain, and Streamlit**.
 
-This application allows users to input a company’s careers page URL. The system extracts job postings from the page and generates personalized cold emails tailored to the specific job role. The generated emails also include relevant portfolio links retrieved from a vector database based on the job description.
-
----
-
-## 🚀 Project Overview
-
-This project demonstrates how Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) can be combined to automate intelligent business outreach.
-
-### 💡 Use Case Scenario
-
-Imagine:
-
-- **Databricks** is hiring for a software engineering role.
-- Your company provides dedicated engineering talent and wants to pitch its services.
-- Instead of manually drafting outreach emails, this tool:
-  - Extracts the job description
-  - Understands required skills using an LLM
-  - Retrieves relevant portfolio projects
-  - Generates a personalized cold email tailored to the role
-
-This helps reduce manual effort while improving personalization and relevance.
+Input a job posting URL and the app generates a personalized cold email pitching **Nexus AI Consulting's** services, backed by relevant portfolio links pulled from a ChromaDB vector store.
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture
 
-### High-Level Flow
-
-1. User inputs a careers page URL.
-2. The application scrapes and extracts job descriptions.
-3. LangChain processes and structures the extracted content.
-4. Relevant portfolio items are retrieved from a vector database using semantic similarity.
-5. The LLM generates a customized cold email.
-6. Streamlit displays the generated output.
 <img width="931" height="569" alt="Cold_Email_generator_HLD drawio" src="https://github.com/user-attachments/assets/4e487976-315c-4ab2-a0c9-cca6d9c21e22" />
 
----
-
-## 🛠️ Tech Stack
-
-- **LLM Provider:** Groq (using a different model version than the reference implementation)
-- **Framework:** LangChain
-- **Frontend:** Streamlit
-- **Vector Store:** ChromaDB (or your configured vector database)
-- **Language:** Python
-
----
-
-## 📦 Features
-
-- 🔎 Extracts job listings from a careers page URL
-- 🧠 Understands job requirements using LLM reasoning
-- 📚 Retrieves relevant portfolio items via vector similarity search
-- ✉️ Generates personalized cold emails
-- ⚡ Fast inference powered by Groq
-
----
-
-## 📂 Project Structure
-
 ```
-├── app/
-│   ├── main.py
-│   ├── chains/
-│   ├── utils/
-│   ├── vector_store/
-│   └── .env
-├── requirements.txt
-└── README.md
-```
----
-
-## 🔧 Setup Instructions
-
-### 1️⃣ Clone the Repository
-
-```bash
-git clone <your-repository-url>
-cd <your-project-folder>
+Job Posting URL
+      │
+      ▼
+ URL Validation ──── invalid? ──► show error
+      │
+      ▼
+ Scrape + Clean + Truncate (24k char limit)
+      │
+      ▼
+ Groq LLM: Extract Job JSON
+ { role, skills, experience, description }
+      │
+      ├─────────────────────────────┐
+      ▼                             ▼
+ ChromaDB Semantic Search     Job JSON
+ (skills → portfolio links)        │
+      │                             │
+      └──────────────┬──────────────┘
+                     ▼
+            Groq LLM: Generate Email
+            (persona + job + links)
+                     │
+                     ▼
+            EmailEvaluator (score 0–1)
+            word count · CTA · tone
+            relevance · portfolio link
+                     │
+          ┌──────────┴──────────┐
+       score ≥ 0.7           score < 0.7
+          │                 & retries left
+          │                      │
+          │              inject feedback +
+          │              raise temperature
+          │                      │
+          │                      └──► retry email
+          ▼
+   Display Email + Quality Scores
 ```
 
+## How It Works
+
+1. User enters a job posting URL
+2. Page is scraped, cleaned, and truncated to fit within LLM token limits
+3. Groq LLM extracts structured job data — role, skills, experience, description
+4. ChromaDB semantic search retrieves the most relevant portfolio links for the job's skills
+5. LLM generates a cold email with an **evaluation + retry loop** — emails are scored on word count, CTA presence, tone, skill relevance, and portfolio link inclusion; if the score is below 0.7 the email is regenerated (up to 3 attempts) with feedback injected into the prompt
+6. Final email is displayed with per-criterion quality scores
+
 ---
 
-### 2️⃣ Install Dependencies
+## Features
+
+- Evaluation + retry loop with automatic feedback injection
+- Configurable persona name, company name, description, and word limit via sidebar
+- Per-job expandable UI when a page contains multiple postings
+- Copy-to-clipboard and .txt download for every email
+- Email history panel (persists across the session)
+- Portfolio Manager page — add, delete, and force-reload portfolio entries without touching files
+- URL validation and accessibility check before scraping
+- Structured JSON logging to `app/logs/cold_email.log`
+- Exponential backoff on Groq API rate limit / timeout errors
+
+---
+
+## Project Structure
+
+```
+app/
+  main.py                  — Streamlit UI, pipeline orchestration
+  chains.py                — LLM calls: job extraction + email generation with eval loop
+  portfolio.py             — ChromaDB wrapper; hash-based auto-reload when CSV changes
+  evaluator.py             — EmailEvaluator: scores word count, CTA, tone, relevance, portfolio link
+  retry.py                 — @with_retry decorator with exponential backoff
+  validators.py            — URL format and accessibility checks
+  logger.py                — JSON structured logger with rotating file handler
+  utils.py                 — clean_text + truncate_text helpers
+  components.py            — Streamlit copy button and download button
+  pages/
+    portfolio_manager.py   — Add/delete portfolio entries, force-reload vector store
+  resources/
+    my_portfolio.csv       — Portfolio data: Techstack and Links columns
+requirements.txt
+```
+
+---
+
+## Setup
+
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+### 2. Configure environment variables
 
-### 3️⃣ Configure Environment Variables
-
-Create a `.env` file inside the `app/` directory and add:
+Create `app/.env` (copy from `app/.env.example`):
 
 ```
 GROQ_API_KEY=your_groq_api_key_here
 ```
 
-You can generate your API key from:  
-https://console.groq.com/keys
+Get a key at: https://console.groq.com/keys
 
----
-
-### 4️⃣ Run the Application
+### 3. Run the app
 
 ```bash
 streamlit run app/main.py
 ```
 
-The app will open in your default browser.
+---
+
+## Portfolio Management
+
+Edit `app/resources/my_portfolio.csv` — two columns: `Techstack` (comma-separated skills) and `Links` (portfolio URL). The vector store auto-reloads when the file changes (detected via MD5 hash). To force a manual reload, use the **Portfolio Manager** page in the app sidebar.
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| LLM | Groq — Llama 3.3 70B Versatile |
+| Orchestration | LangChain |
+| Vector Store | ChromaDB (persistent) |
+| Frontend | Streamlit |
+| Language | Python 3.10+ |

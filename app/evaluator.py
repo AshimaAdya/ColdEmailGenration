@@ -42,11 +42,11 @@ class EmailEvaluator:
 
     def score_word_count(self, email: str) -> tuple[float, str]:
         count = len(email.split())
-        if 80 <= count <= 200:
+        if 100 <= count <= 300:
             return 1.0, ""
-        if count < 80:
-            return 0.0, f"Email is too short ({count} words); aim for 80–200 words."
-        return 0.0, f"Email is too long ({count} words); aim for 80–200 words."
+        if count < 100:
+            return 0.0, f"Email is too short ({count} words); aim for 100–300 words."
+        return 0.0, f"Email is too long ({count} words); aim for 100–300 words."
 
     def score_has_cta(self, email: str) -> tuple[float, str]:
         if _CTA_PATTERN.search(email):

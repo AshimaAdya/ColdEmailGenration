@@ -30,14 +30,21 @@ class Chain:
 {page_data}
 
 ### INSTRUCTION:
-Extract the job postings and return them in JSON format with keys:
-'role','experience','skills','description'.
+Extract every job posting from the text above and return a JSON array.
+Each object in the array must have EXACTLY these four keys — no others, no renaming:
 
-### OUTPUT RULES (VERY IMPORTANT):
-- Return ONLY valid JSON
-- Do NOT wrap the output in ```json or ```
+  "role"        — the exact job title as written in the posting (e.g. "Senior Software Engineer - Backend")
+  "experience"  — required years or level of experience
+  "skills"      — list of required technical skills
+  "description" — 1-2 sentence summary of the role
 
-Return JSON now:
+### OUTPUT RULES:
+- Return ONLY a valid JSON array, even if there is just one job (wrap it in [ ])
+- The key for the job title MUST be "role" — never "title", "job_title", or "position"
+- Do NOT wrap output in ```json or ``` blocks
+- Do NOT add any explanation before or after the JSON
+
+Return JSON array now:
 """)
         with Timer(logger, "extract_jobs"):
             chain_extract = prompt_extract | self.llm
@@ -60,13 +67,12 @@ Return JSON now:
             "We specialize in reducing engineering hiring risk by providing senior-level "
             "consultants who can contribute from day one.",
         )
-        word_limit = cfg.get("word_limit", 150)
+        word_limit = cfg.get("word_limit", 250)
 
         link_instruction = (
-            f"You MUST include these exact portfolio URLs verbatim in the email body "
-            f"(copy-paste them, do not paraphrase or use placeholders): {links}"
+            f"Paste these exact portfolio URLs as a bullet list — do not paraphrase or rename them:\n{chr(10).join('- ' + u for u in links)}"
             if links else
-            "Do not include any portfolio links or placeholders — no links are available."
+            "Do not include any portfolio links or placeholders — no links are available for this submission."
         )
 
         base_prompt = """### JOB DESCRIPTION:
@@ -75,23 +81,39 @@ Return JSON now:
 ### ABOUT {company_name}:
 {company_desc}
 
-### INSTRUCTION:
-You are {persona_name}, a Business Development Executive at {company_name}.
+### YOUR IDENTITY:
+You are {persona_name}, Business Development Executive at {company_name}.
 
-Write a cold email to the hiring manager for the job described above.
-The goal of the email is to pitch {company_name}'s services as an alternative or supplement to hiring full-time.
+### TASK:
+Write a professional outreach email to the hiring manager for the role above.
+The email should feel like a genuine business introduction, not a sales blast.
 
-The email must:
-- Open with one specific observation about the role or company (not a generic opener)
-- Explain in 2-3 sentences exactly how {company_name} solves the pain this role is trying to solve
-- {link_instruction}
-- End with one clear, low-friction call to action (suggest a 15-min call)
-- Be under {word_limit} words total
-- Sound human, direct, and confident — not salesy
+### EMAIL FORMAT — reproduce this structure exactly:
 
-Do not use phrases like "I hope this email finds you well" or "I wanted to reach out".
-Do not invent or paraphrase portfolio links — use only the exact URLs provided above.
-Do not provide a preamble.
+Hi [Hiring Manager / Hiring Team],
+
+I am reaching out on behalf of {company_name}. We came across your opening for {job_role} and believe we can be a strong partner in helping you move fast on this need.
+
+[BODY — 2 to 3 sentences: describe specifically how {company_name} addresses the core technical requirements of this role. Name the exact skills and tools from the job description. Emphasise that our consultants are senior-level, available immediately, and reduce hiring risk compared to a full-time search.]
+
+Here are some relevant examples from our portfolio that align with this role:
+{link_instruction}
+
+We would love to explore how {company_name} can support your team. Would you be open to a quick 15-minute call this week?
+
+Best regards,
+{persona_name}
+Business Development Executive
+{company_name}
+
+### HARD RULES:
+- Keep the body section (between the intro and portfolio links) to 2–3 sentences only
+- Use the exact job title from the job description — do not paraphrase it
+- Total email length must be under {word_limit} words
+- Tone: professional but warm — not stiff, not salesy
+- Never use: "I hope this finds you well", "touch base", "synergy", "leverage", "utilize", "circle back", "game-changer"
+- Do not invent portfolio links — use only the exact URLs provided above
+- Do not add a subject line or any text outside the email
 {feedback_section}
 ### EMAIL:
 """
@@ -114,8 +136,20 @@ Do not provide a preamble.
             chain_email = prompt_email | llm
 
             with Timer(logger, "write_email", attempt=attempt + 1):
+                job_role = (
+                    job.get("role")
+                    or job.get("title")
+                    or job.get("job_title")
+                    or job.get("position")
+                    or ""
+                ).strip()
+                if not job_role:
+                    logger.warning("Could not find role key in job dict: %s", list(job.keys()))
+                    job_role = "the advertised role"
+
                 res = chain_email.invoke({
                     "job_description": str(job),
+                    "job_role": job_role,
                     "company_name": company_name,
                     "company_desc": company_desc,
                     "persona_name": persona_name,

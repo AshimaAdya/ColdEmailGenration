@@ -1,11 +1,10 @@
 import datetime
 import streamlit as st
-from langchain_community.document_loaders import WebBaseLoader
 from dotenv import load_dotenv
 
 from chains import Chain
 from portfolio import Portfolio
-from utils import clean_text, truncate_text
+from utils import clean_text, truncate_text, scrape_url
 from validators import validate_url, check_url_accessible
 from components import copy_button, download_button
 from logger import get_logger, Timer
@@ -30,7 +29,7 @@ def _render_sidebar() -> dict:
             ),
             height=120,
         )
-        word_limit = st.slider("Email Word Limit", min_value=80, max_value=300, value=150, step=10)
+        word_limit = st.slider("Email Word Limit", min_value=100, max_value=400, value=250, step=10)
         max_retries = st.slider("Max Retry Attempts", min_value=1, max_value=5, value=3)
 
         st.session_state["persona_name"] = persona_name
@@ -61,89 +60,136 @@ def _render_quality_scores(eval_result, max_retries: int):
 
 
 def create_streamlit_app(llm: Chain, portfolio: Portfolio):
-    st.title("Cold Mail Generator")
+    st.title("NexusReach")
 
     if "email_history" not in st.session_state:
         st.session_state["email_history"] = []
 
     config = _render_sidebar()
 
-    url_input = st.text_input("Enter a Job Posting URL:")
+    input_mode = st.radio(
+        "Input method",
+        ["URL", "Paste job description"],
+        horizontal=True,
+        help="Use 'Paste' for LinkedIn or any site that blocks automated access.",
+    )
+
+    url_input = ""
+    pasted_text = ""
+
+    if input_mode == "URL":
+        url_input = st.text_input(
+            "Job posting URL",
+            placeholder="https://jobs.lever.co/company/role  |  https://greenhouse.io/...  |  etc.",
+        )
+        st.caption("Works with most job boards. For LinkedIn, use Paste mode instead.")
+    else:
+        pasted_text = st.text_area(
+            "Paste the job description here",
+            height=250,
+            placeholder="Copy the full job description from LinkedIn, any job board, or company website and paste it here.",
+        )
+
     submit_button = st.button("Generate Email", type="primary")
 
     if submit_button:
-        # Validate URL before doing any work
-        valid, err = validate_url(url_input)
-        if not valid:
-            st.error(err)
-            st.stop()
+        error_msg = None
+        data = None
+        scrape_warning = None
 
-        accessible, err = check_url_accessible(url_input)
-        if not accessible:
-            st.error(err)
-            st.stop()
+        # --- Input preparation (outside try/except so st.error stops cleanly) ---
+        if input_mode == "URL":
+            valid, err = validate_url(url_input)
+            if not valid:
+                st.error(err)
+            else:
+                try:
+                    with st.spinner("Fetching job page..."):
+                        data, scrape_warning = scrape_url(url_input)
+                except ValueError as e:
+                    error_msg = str(e)
+        else:
+            if not pasted_text.strip():
+                st.error("Please paste a job description before generating.")
+            else:
+                data = truncate_text(clean_text(pasted_text))
 
-        try:
+        if error_msg:
+            st.error(error_msg)
+        elif data is not None:
+            if scrape_warning:
+                st.warning(scrape_warning)
+
+            # --- Pipeline ---
+            results = []
+            pipeline_error = None
             with st.status("Processing...", expanded=True) as status:
-                status.write("Fetching and cleaning the job page...")
-                with Timer(logger, "url_load", url=url_input):
-                    loader = WebBaseLoader([url_input])
-                    data = truncate_text(clean_text(loader.load().pop().page_content))
+                try:
+                    status.write("Loading portfolio vector store...")
+                    portfolio.load_portfolio()
 
-                status.write("Loading portfolio vector store...")
-                portfolio.load_portfolio()
+                    status.write("Extracting job details with LLM...")
+                    jobs = llm.extract_jobs(data)
+                    logger.info("Extracted %d job(s)", len(jobs), extra={"step": "extract_jobs", "job_count": len(jobs)})
 
-                status.write("Extracting job postings with LLM...")
-                jobs = llm.extract_jobs(data)
-                logger.info("Extracted %d job(s)", len(jobs), extra={"step": "extract_jobs", "job_count": len(jobs)})
+                    if not jobs:
+                        logger.warning("Job extraction returned empty — using fallback job dict")
+                        jobs = [{"role": "", "skills": [], "experience": "", "description": data[:500]}]
 
-                if len(jobs) > 1:
-                    status.write(f"Found {len(jobs)} job postings. Generating emails...")
-                else:
-                    status.write("Generating cold email...")
+                    if True:
+                        for i, job in enumerate(jobs):
+                            role = (
+                                job.get("role") or job.get("title") or
+                                job.get("job_title") or f"Job {i + 1}"
+                            ).strip() or "the advertised role"
+                            status.write(f"Generating email for **{role}**...")
 
-                results = []
-                for job in jobs:
-                    skills = job.get("skills", [])
-                    links = portfolio.query_links(skills)
-                    if not links:
-                        logger.warning("No portfolio links returned for skills: %s", skills)
-                        status.write("Warning: no matching portfolio links found — check Portfolio Manager.")
-                    email, eval_result = llm.write_email(job, links, config=config, max_retries=config["max_retries"])
-                    results.append((job, email, eval_result))
+                            skills = job.get("skills", [])
+                            links = portfolio.query_links(skills)
+                            if not links:
+                                logger.warning("No portfolio links returned for skills: %s", skills)
 
-                status.update(label=f"Done! Generated {len(results)} email(s).", state="complete")
+                            email, eval_result = llm.write_email(job, links, config=config, max_retries=config["max_retries"])
+                            results.append((job, email, eval_result))
 
-            if len(results) > 1:
-                st.info(f"Found {len(results)} job postings on this page.")
+                except Exception as e:
+                    logger.exception("Pipeline failed")
+                    pipeline_error = str(e)
 
-            for i, (job, email, eval_result) in enumerate(results):
-                role = job.get("role", f"Job {i + 1}")
-                with st.expander(f"Job {i + 1}: {role}", expanded=(i == 0)):
-                    st.code(email, language="markdown")
+                if pipeline_error:
+                    status.update(label="Failed.", state="error")
+                elif results:
+                    label = f"Email ready — {results[0][0].get('role', 'role')}" if len(results) == 1 else f"Done — {len(results)} emails generated."
+                    status.update(label=label, state="complete")
 
-                    col_copy, col_dl, _ = st.columns([1, 1, 4])
-                    with col_copy:
-                        copy_button(email)
-                    with col_dl:
-                        download_button(email, role)
+            if pipeline_error:
+                st.error(pipeline_error)
+            else:
+                if len(results) > 1:
+                    st.info(f"Found {len(results)} job postings on this page.")
 
-                    st.divider()
-                    st.caption("Quality Scores")
-                    _render_quality_scores(eval_result, config["max_retries"])
+                for i, (job, email, eval_result) in enumerate(results):
+                    role = job.get("role", f"Job {i + 1}")
+                    with st.expander(f"Job {i + 1}: {role}", expanded=(i == 0)):
+                        st.code(email, language="markdown")
 
-                # Save to session history
-                st.session_state["email_history"].append({
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "url": url_input,
-                    "role": role,
-                    "email": email,
-                    "score": eval_result.overall_score,
-                })
+                        col_copy, col_dl, _ = st.columns([1, 1, 4])
+                        with col_copy:
+                            copy_button(email)
+                        with col_dl:
+                            download_button(email, role)
 
-        except Exception as e:
-            logger.exception("Pipeline failed for URL: %s", url_input)
-            st.error(f"An error occurred: {e}")
+                        st.divider()
+                        st.caption("Quality Scores")
+                        _render_quality_scores(eval_result, config["max_retries"])
+
+                    st.session_state["email_history"].append({
+                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "url": url_input,
+                        "role": role,
+                        "email": email,
+                        "score": eval_result.overall_score,
+                    })
 
     # Email history panel
     history = st.session_state.get("email_history", [])
@@ -157,7 +203,7 @@ def create_streamlit_app(llm: Chain, portfolio: Portfolio):
 
 
 if __name__ == "__main__":
-    st.set_page_config(layout="wide", page_title="Cold Email Generator", page_icon="📧")
+    st.set_page_config(layout="wide", page_title="NexusReach", page_icon="📧")
     chain = Chain()
     portfolio = Portfolio()
     create_streamlit_app(chain, portfolio)
